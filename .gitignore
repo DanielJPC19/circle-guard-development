@@ -1,0 +1,47 @@
+# Gradle
+.gradle/
+build/
+*/build/
+!gradle/wrapper/gradle-wrapper.jar
+
+# IntelliJ IDEA
+.idea/
+*.iws
+*.iml
+*.ipr
+out/
+
+# VS Code
+.vscode/
+
+# macOS
+.DS_Store
+
+# Java / Kotlin compiled
+*.class
+*.jar
+!gradle/wrapper/gradle-wrapper.jar
+
+# Spring Boot
+*.log
+logs/
+
+# Docker
+.docker/
+
+# Environment / secrets — NEVER commit real secrets
+.env
+.env.*
+*.secret
+application-local.yml
+application-local.properties
+
+# Node / mobile
+mobile/node_modules/
+mobile/.expo/
+mobile/dist/
+mobile/.metro-cache/
+
+# Test reports
+**/build/reports/
+**/build/test-results/

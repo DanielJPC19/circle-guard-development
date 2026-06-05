@@ -1,0 +1,14 @@
+spring:
+  datasource:
+    url: jdbc:postgresql://circleguard-postgres.circleguard-stage.svc.cluster.local:5432/circleguard_identity
+    hikari:
+      maximum-pool-size: 10
+      minimum-idle: 3
+  jpa:
+    hibernate:
+      ddl-auto: validate
+
+logging:
+  level:
+    root: INFO
+    com.circleguard: INFO

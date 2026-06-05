@@ -1,0 +1,380 @@
+name: CI — Main (Production)
+
+on:
+  push:
+    branches: [main]
+
+env:
+  ACR_REGISTRY: ${{ secrets.ACR_LOGIN_SERVER }}
+
+jobs:
+  build-and-test:
+    name: Build, Unit & Integration Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Java 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+          cache: 'gradle'
+
+      - name: Start test infrastructure
+        run: docker compose -f docker-compose.test.yml up -d --wait
+
+      - name: Build all services
+        run: ./gradlew bootJar --parallel -x test
+
+      - name: Run unit tests
+        run: ./gradlew unitTest --parallel
+
+      - name: Run integration tests
+        run: ./gradlew integrationTest --parallel
+
+      - name: Generate JaCoCo coverage report
+        run: ./gradlew jacocoTestReport --parallel
+
+      - name: Stop test infrastructure
+        if: always()
+        run: docker compose -f docker-compose.test.yml down -v
+
+      - name: Upload coverage reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: jacoco-reports
+          path: '**/build/reports/jacoco/test/jacocoTestReport.xml'
+
+  sonarqube:
+    name: SonarQube Quality Gate
+    runs-on: ubuntu-latest
+    needs: build-and-test
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Java 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+          cache: 'gradle'
+
+      - name: Download coverage reports
+        uses: actions/download-artifact@v4
+        with:
+          name: jacoco-reports
+
+      - name: SonarQube Analysis
+        run: |
+          ./gradlew sonarqube \
+            -Dsonar.projectKey=circleguard \
+            -Dsonar.host.url=${{ secrets.SONARQUBE_URL }} \
+            -Dsonar.login=${{ secrets.SONARQUBE_TOKEN }}
+
+      - name: SonarQube Quality Gate
+        uses: sonarsource/sonarqube-quality-gate-action@master
+        timeout-minutes: 5
+        with:
+          scanMetadataReportFile: .scannerwork/report-task.txt
+        env:
+          SONAR_TOKEN: ${{ secrets.SONARQUBE_TOKEN }}
+
+  trivy-scan:
+    name: Container Security Scan (Trivy)
+    runs-on: ubuntu-latest
+    needs: build-and-test
+    strategy:
+      matrix:
+        service:
+          - circleguard-auth-service
+          - circleguard-identity-service
+          - circleguard-promotion-service
+          - circleguard-notification-service
+          - circleguard-form-service
+          - circleguard-gateway-service
+          - circleguard-dashboard-service
+          - circleguard-file-service
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Java 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+          cache: 'gradle'
+
+      - name: Build JAR
+        run: ./gradlew :services:${{ matrix.service }}:bootJar -x test
+
+      - name: Build Docker image
+        run: |
+          JAR=$(find services/${{ matrix.service }}/build/libs -name "*.jar" ! -name "*-plain.jar" | head -1)
+          docker build \
+            -f services/${{ matrix.service }}/Dockerfile \
+            --build-arg JAR_FILE=${JAR} \
+            -t ${{ matrix.service }}:scan .
+
+      - name: Trivy vulnerability scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: '${{ matrix.service }}:scan'
+          format: 'sarif'
+          output: 'trivy-results-${{ matrix.service }}.sarif'
+          severity: 'CRITICAL,HIGH'
+          exit-code: '1'
+
+      - name: Upload Trivy results
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: 'trivy-results-${{ matrix.service }}.sarif'
+
+  owasp-zap:
+    name: OWASP ZAP DAST Scan
+    runs-on: ubuntu-latest
+    needs: build-and-test
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: OWASP ZAP Full Scan (against staging)
+        uses: zaproxy/action-full-scan@v0.10.0
+        with:
+          target: 'https://api-stage.circleguard.edu'
+          rules_file_name: '.zap/rules.tsv'
+          cmd_options: '-a'
+          artifact_name: 'zap-report'
+
+  push-to-acr:
+    name: Push Production Images to ACR
+    runs-on: ubuntu-latest
+    needs: [sonarqube, trivy-scan, owasp-zap]
+    outputs:
+      short_sha: ${{ steps.vars.outputs.SHORT_SHA }}
+    strategy:
+      matrix:
+        service:
+          - circleguard-auth-service
+          - circleguard-identity-service
+          - circleguard-promotion-service
+          - circleguard-notification-service
+          - circleguard-form-service
+          - circleguard-gateway-service
+          - circleguard-dashboard-service
+          - circleguard-file-service
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Java 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+          cache: 'gradle'
+
+      - name: Build JAR
+        run: ./gradlew :services:${{ matrix.service }}:bootJar -x test
+
+      - name: Set short SHA
+        id: vars
+        run: echo "SHORT_SHA=${GITHUB_SHA::7}" >> $GITHUB_OUTPUT
+
+      - name: Log in to ACR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ secrets.ACR_LOGIN_SERVER }}
+          username: ${{ secrets.ACR_USERNAME }}
+          password: ${{ secrets.ACR_PASSWORD }}
+
+      - name: Build and push production image
+        run: |
+          JAR=$(find services/${{ matrix.service }}/build/libs -name "*.jar" ! -name "*-plain.jar" | head -1)
+          SHORT_SHA="${{ steps.vars.outputs.SHORT_SHA }}"
+          PROD_TAG="${{ secrets.ACR_LOGIN_SERVER }}/circleguard/${{ matrix.service }}:prod-${SHORT_SHA}"
+          LATEST_TAG="${{ secrets.ACR_LOGIN_SERVER }}/circleguard/${{ matrix.service }}:latest"
+          docker build \
+            -f services/${{ matrix.service }}/Dockerfile \
+            --build-arg JAR_FILE=${JAR} \
+            -t ${PROD_TAG} \
+            -t ${LATEST_TAG} \
+            --label "git.sha=${GITHUB_SHA}" \
+            --label "git.branch=${GITHUB_REF_NAME}" \
+            --label "build.date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            .
+          docker push ${PROD_TAG}
+          docker push ${LATEST_TAG}
+          echo "Pushed: ${PROD_TAG}"
+
+  performance-tests:
+    name: Performance Tests (Locust)
+    runs-on: ubuntu-latest
+    needs: push-to-acr
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Locust
+        run: pip install locust
+
+      - name: Run performance tests against staging
+        run: |
+          locust -f tests/performance/locustfile.py \
+            --host=https://api-stage.circleguard.edu \
+            --users=50 --spawn-rate=5 --run-time=5m \
+            --headless --csv=results/locust \
+            --exit-code-on-error 1
+
+      - name: Upload performance results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: locust-results
+          path: results/
+
+  release-notes:
+    name: Generate Release Notes
+    runs-on: ubuntu-latest
+    needs: push-to-acr
+    outputs:
+      new_version: ${{ steps.semver.outputs.NEW_TAG }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Determine semantic version
+        id: semver
+        run: |
+          LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
+          COMMITS=$(git log ${LAST_TAG}..HEAD --oneline)
+          MAJOR=$(echo $LAST_TAG | sed 's/v//' | cut -d. -f1)
+          MINOR=$(echo $LAST_TAG | sed 's/v//' | cut -d. -f2)
+          PATCH=$(echo $LAST_TAG | sed 's/v//' | cut -d. -f3)
+
+          if echo "$COMMITS" | grep -qE "BREAKING CHANGE|feat!:"; then
+            MAJOR=$((MAJOR + 1)); MINOR=0; PATCH=0
+          elif echo "$COMMITS" | grep -qE "^[a-f0-9]+ feat"; then
+            MINOR=$((MINOR + 1)); PATCH=0
+          else
+            PATCH=$((PATCH + 1))
+          fi
+
+          NEW_TAG="v${MAJOR}.${MINOR}.${PATCH}"
+          echo "NEW_TAG=${NEW_TAG}" >> $GITHUB_OUTPUT
+          echo "New version: ${NEW_TAG}"
+
+      - name: Generate release notes from git log
+        run: |
+          LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
+          echo "# Release ${{ steps.semver.outputs.NEW_TAG }}" > release-notes.md
+          echo "" >> release-notes.md
+          echo "## Changes since ${LAST_TAG}" >> release-notes.md
+          echo "" >> release-notes.md
+          git log ${LAST_TAG}..HEAD --pretty=format:"- %s (%h)" >> release-notes.md
+
+      - name: Upload release notes
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-notes
+          path: release-notes.md
+
+  manual-approval:
+    name: Manual Approval for Production
+    runs-on: ubuntu-latest
+    needs: [performance-tests, release-notes]
+    environment:
+      name: production
+    steps:
+      - name: Awaiting approval
+        run: echo "Production deployment approved. Proceeding..."
+
+  trigger-jenkins-prod:
+    name: Trigger Jenkins CD — Production
+    runs-on: ubuntu-latest
+    needs: [manual-approval, release-notes]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set short SHA
+        id: vars
+        run: echo "SHORT_SHA=${GITHUB_SHA::7}" >> $GITHUB_OUTPUT
+
+      - name: Trigger Jenkins Production Pipeline
+        run: |
+          RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" \
+            -X POST "${{ secrets.JENKINS_PROD_URL }}/job/circleguard-prod/buildWithParameters" \
+            --user "ci:${{ secrets.JENKINS_TOKEN }}" \
+            --data-urlencode "IMAGE_TAG=prod-${{ steps.vars.outputs.SHORT_SHA }}" \
+            --data-urlencode "ENVIRONMENT=production")
+          echo "Jenkins response: $RESPONSE"
+          if [ "$RESPONSE" != "201" ]; then
+            echo "Failed to trigger Jenkins production pipeline"
+            exit 1
+          fi
+
+      - name: Wait for production deploy (max 30 min)
+        run: |
+          echo "Waiting for production deployment..."
+          sleep 300
+          for i in $(seq 1 12); do
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+              https://api.circleguard.edu/actuator/health 2>/dev/null || echo "000")
+            if [ "$STATUS" = "200" ]; then
+              echo "Production is healthy"
+              exit 0
+            fi
+            echo "Attempt $i/12: production not ready (status: $STATUS), waiting 30s..."
+            sleep 30
+          done
+          echo "Production health check failed"
+          exit 1
+
+  create-github-release:
+    name: Create GitHub Release
+    runs-on: ubuntu-latest
+    needs: [trigger-jenkins-prod, release-notes]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download release notes
+        uses: actions/download-artifact@v4
+        with:
+          name: release-notes
+
+      - name: Create git tag
+        run: |
+          git config user.email "ci@circleguard.edu"
+          git config user.name "CI Bot"
+          git tag ${{ needs.release-notes.outputs.new_version }}
+          git push origin ${{ needs.release-notes.outputs.new_version }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GH_TOKEN }}
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.release-notes.outputs.new_version }}
+          name: CircleGuard ${{ needs.release-notes.outputs.new_version }}
+          body_path: release-notes.md
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GH_TOKEN }}
