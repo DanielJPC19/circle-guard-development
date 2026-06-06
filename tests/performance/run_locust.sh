@@ -21,20 +21,23 @@ CSV_PREFIX="${REPORT_DIR}/locust-${TIMESTAMP}"
 
 mkdir -p "$REPORT_DIR"
 
-if ! command -v locust &>/dev/null; then
-    echo "==> Installing locust..."
-    pip install locust --quiet
-fi
+# Create temporary virtualenv for Locust
+VENV_DIR=$(mktemp -d)
+echo "==> Creating temporary virtualenv at $VENV_DIR"
+python3 -m venv "$VENV_DIR"
+source "$VENV_DIR/bin/activate"
+echo "==> Installing locust in virtualenv..."
+pip install locust --quiet
 
 echo "==> Auth: $AUTH_URL | Gateway: $GATEWAY_URL | Promotion: $PROMOTION_URL | Form: $FORM_URL"
-echo "==> Users: 30 | Spawn rate: 3/s | Duration: 120s"
+echo "==> Users: 50 | Spawn rate: 5/s | Duration: 5m"
 
 locust \
     -f tests/performance/locustfile.py \
     --host="$AUTH_URL" \
-    --users=30 \
-    --spawn-rate=3 \
-    --run-time=120s \
+    --users=50 \
+    --spawn-rate=5 \
+    --run-time=5m \
     --headless \
     --html="$REPORT_FILE" \
     --csv="$CSV_PREFIX"
@@ -45,7 +48,7 @@ if [ -f "$STATS_CSV" ]; then
     FAILURE_RATE=$(awk -F',' '/Aggregated/ {gsub(/"/, "", $7); print $7}' "$STATS_CSV")
 
     echo "==> Average response time: ${AVG_MS}ms (threshold: 2000ms)"
-    echo "==> Failure rate: ${FAILURE_RATE}% (threshold: 15%)"
+    echo "==> Failure rate: ${FAILURE_RATE}% (threshold: 5%)"
 
     if [ -n "$AVG_MS" ] && [ "$AVG_MS" -gt 2000 ]; then
         echo "==> FAIL: avg ${AVG_MS}ms exceeds 2000ms threshold"
@@ -54,8 +57,8 @@ if [ -f "$STATS_CSV" ]; then
 
     if [ -n "$FAILURE_RATE" ]; then
         FAILURE_INT=$(echo "$FAILURE_RATE" | awk '{printf "%.0f", $1}')
-        if [ "$FAILURE_INT" -gt 15 ]; then
-            echo "==> FAIL: ${FAILURE_RATE}% exceeds 15% threshold"
+        if [ "$FAILURE_INT" -gt 5 ]; then
+            echo "==> FAIL: ${FAILURE_RATE}% exceeds 5% threshold"
             exit 1
         fi
         echo "==> PASS: Performance within acceptable limits (failures: ${FAILURE_RATE}%)"
@@ -63,5 +66,10 @@ if [ -f "$STATS_CSV" ]; then
         echo "==> PASS: Performance within acceptable limits"
     fi
 fi
+
+# Cleanup virtualenv
+echo "==> Cleaning up virtualenv..."
+deactivate || true
+rm -rf "$VENV_DIR"
 
 echo "==> Report: $REPORT_FILE"
