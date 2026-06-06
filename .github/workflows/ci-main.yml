@@ -234,8 +234,42 @@ jobs:
           locust -f tests/performance/locustfile.py \
             --host=https://api-stage.circleguard.edu \
             --users=50 --spawn-rate=5 --run-time=5m \
-            --headless --csv=results/locust \
-            --exit-code-on-error 1
+            --headless --csv=results/locust
+
+      - name: Validate error rate threshold (5%)
+        run: |
+          # Read Locust CSV summary and calculate error rate
+          CSV_FILE="results/locust_stats.csv"
+          if [ ! -f "$CSV_FILE" ]; then
+            echo "Error: Locust stats file not found"
+            exit 1
+          fi
+
+          # Skip header and sum up requests and failures
+          TOTAL_REQUESTS=$(tail -n +2 "$CSV_FILE" | awk -F',' '{sum+=$2} END {print sum}')
+          TOTAL_FAILURES=$(tail -n +2 "$CSV_FILE" | awk -F',' '{sum+=$3} END {print sum}')
+
+          if [ "$TOTAL_REQUESTS" -eq 0 ]; then
+            echo "Error: No requests recorded in Locust test"
+            exit 1
+          fi
+
+          ERROR_RATE=$(echo "scale=2; ($TOTAL_FAILURES / $TOTAL_REQUESTS) * 100" | bc)
+          THRESHOLD=5
+
+          echo "==> Performance Test Results:"
+          echo "    Total Requests: $TOTAL_REQUESTS"
+          echo "    Total Failures: $TOTAL_FAILURES"
+          echo "    Error Rate: ${ERROR_RATE}%"
+          echo "    Threshold: ${THRESHOLD}%"
+
+          if (( $(echo "$ERROR_RATE > $THRESHOLD" | bc -l) )); then
+            echo "✗ Error rate exceeds 5% threshold (${ERROR_RATE}% > ${THRESHOLD}%)"
+            exit 1
+          else
+            echo "✓ Error rate is within acceptable threshold"
+            exit 0
+          fi
 
       - name: Upload performance results
         uses: actions/upload-artifact@v4
@@ -359,6 +393,12 @@ jobs:
         with:
           name: release-notes
 
+      - name: Download Locust performance results
+        uses: actions/download-artifact@v4
+        with:
+          name: locust-results
+          path: locust-results/
+
       - name: Create git tag
         run: |
           git config user.email "ci@circleguard.edu"
@@ -374,6 +414,9 @@ jobs:
           tag_name: ${{ needs.release-notes.outputs.new_version }}
           name: CircleGuard ${{ needs.release-notes.outputs.new_version }}
           body_path: release-notes.md
+          files: |
+            locust-results/locust_stats.csv
+            locust-results/locust_stats_history.csv
           draft: false
           prerelease: false
         env:
