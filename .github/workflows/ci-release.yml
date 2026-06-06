@@ -254,3 +254,4 @@ jobs:
             -Dgateway.service.url=https://api-stage.circleguard.edu
         env:
           E2E_BASE_URL: https://api-stage.circleguard.edu
+          AZ_SUBSCRIPTION_ID: ${{ secrets.AZ_SUBSCRIPTION_ID }}
