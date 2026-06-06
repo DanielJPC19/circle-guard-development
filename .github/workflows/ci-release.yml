@@ -217,20 +217,19 @@ jobs:
 
       - name: Wait for Jenkins staging deploy (max 30 min)
         run: |
-          echo "Waiting 5 minutes for staging deploy to complete..."
-          sleep 300
-          # Check staging health
-          for i in $(seq 1 12); do
+          echo "Polling Jenkins staging deployment (max 30 minutes)..."
+          # 60 attempts × 30 seconds = 1800 seconds = 30 minutes
+          for i in $(seq 1 60); do
             STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
               https://api-stage.circleguard.edu/actuator/health 2>/dev/null || echo "000")
             if [ "$STATUS" = "200" ]; then
-              echo "Staging is healthy"
+              echo "✓ Staging is healthy (attempt $i/60)"
               exit 0
             fi
-            echo "Attempt $i/12: staging not ready (status: $STATUS), waiting 30s..."
+            echo "Attempt $i/60: staging not ready (status: $STATUS), waiting 30s..."
             sleep 30
           done
-          echo "Staging health check failed after 30 minutes"
+          echo "✗ Jenkins deploy timeout after 30 minutes (60 attempts exceeded)"
           exit 1
 
   e2e-tests:
