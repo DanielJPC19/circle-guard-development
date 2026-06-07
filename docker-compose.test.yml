@@ -112,6 +112,8 @@ services:
     build:
       context: .
       dockerfile: services/circleguard-auth-service/Dockerfile
+      args:
+        JAR_FILE: services/circleguard-auth-service/build/libs/circleguard-auth-service-1.0.0-SNAPSHOT.jar
     container_name: circleguard-auth
     ports:
       - "8180:8180"
@@ -143,6 +145,8 @@ services:
     build:
       context: .
       dockerfile: services/circleguard-identity-service/Dockerfile
+      args:
+        JAR_FILE: services/circleguard-identity-service/build/libs/circleguard-identity-service-1.0.0-SNAPSHOT.jar
     container_name: circleguard-identity
     ports:
       - "8083:8083"
@@ -168,6 +172,8 @@ services:
     build:
       context: .
       dockerfile: services/circleguard-promotion-service/Dockerfile
+      args:
+        JAR_FILE: services/circleguard-promotion-service/build/libs/circleguard-promotion-service-1.0.0-SNAPSHOT.jar
     container_name: circleguard-promotion
     ports:
       - "8088:8088"
@@ -203,6 +209,8 @@ services:
     build:
       context: .
       dockerfile: services/circleguard-gateway-service/Dockerfile
+      args:
+        JAR_FILE: services/circleguard-gateway-service/build/libs/circleguard-gateway-service-1.0.0-SNAPSHOT.jar
     container_name: circleguard-gateway
     ports:
       - "8087:8087"
@@ -227,6 +235,8 @@ services:
     build:
       context: .
       dockerfile: services/circleguard-notification-service/Dockerfile
+      args:
+        JAR_FILE: services/circleguard-notification-service/build/libs/circleguard-notification-service-1.0.0-SNAPSHOT.jar
     container_name: circleguard-notification
     ports:
       - "8082:8082"
@@ -247,6 +257,8 @@ services:
     build:
       context: .
       dockerfile: services/circleguard-form-service/Dockerfile
+      args:
+        JAR_FILE: services/circleguard-form-service/build/libs/circleguard-form-service-1.0.0-SNAPSHOT.jar
     container_name: circleguard-form
     ports:
       - "8086:8086"
@@ -267,6 +279,55 @@ services:
       retries: 8
       start_period: 40s
 
+  dashboard-service:
+    build:
+      context: .
+      dockerfile: services/circleguard-dashboard-service/Dockerfile
+      args:
+        JAR_FILE: services/circleguard-dashboard-service/build/libs/circleguard-dashboard-service-1.0.0-SNAPSHOT.jar
+    container_name: circleguard-dashboard
+    ports:
+      - "8084:8084"
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/circleguard_dashboard
+      SPRING_DATASOURCE_USERNAME: admin
+      SPRING_DATASOURCE_PASSWORD: password
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:8084/actuator/health || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 8
+      start_period: 40s
+
+  file-service:
+    build:
+      context: .
+      dockerfile: services/circleguard-file-service/Dockerfile
+      args:
+        JAR_FILE: services/circleguard-file-service/build/libs/circleguard-file-service-1.0.0-SNAPSHOT.jar
+    container_name: circleguard-file
+    ports:
+      - "8085:8085"
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/circleguard_file
+      SPRING_DATASOURCE_USERNAME: admin
+      SPRING_DATASOURCE_PASSWORD: password
+    volumes:
+      - file-uploads:/app/uploads
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:8085/actuator/health || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 8
+      start_period: 40s
+
 volumes:
   pgdata-test:
   neo4jdata-test:
+  file-uploads:
