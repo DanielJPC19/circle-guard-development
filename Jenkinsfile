@@ -1,3 +1,11 @@
+/*
+ * IMPORTANTE: Este Jenkinsfile es un pipeline ALTERNATIVO a los workflows de GitHub Actions.
+ * NO ejecutar este pipeline en paralelo con .github/workflows/ci-develop.yml,
+ * ci-release.yml o ci-main.yml sobre el mismo ambiente, ya que puede causar
+ * conflictos de deploy y condiciones de carrera en los clusters.
+ * Uso recomendado: onboarding, pruebas locales o cuando GitHub Actions no esté disponible.
+ */
+
 pipeline {
     agent any
 
