@@ -1,0 +1,30 @@
+spring:
+  datasource:
+    url: jdbc:postgresql://circleguard-postgres.circleguard-dev.svc.cluster.local:5432/circleguard_promotion
+    hikari:
+      maximum-pool-size: 5
+      minimum-idle: 2
+  jpa:
+    hibernate:
+      ddl-auto: update
+  neo4j:
+    uri: bolt://circleguard-neo4j.circleguard-dev.svc.cluster.local:7687
+  kafka:
+    bootstrap-servers: circleguard-kafka.circleguard-dev.svc.cluster.local:9092
+  data:
+    redis:
+      host: circleguard-redis-master.circleguard-dev.svc.cluster.local
+
+logging:
+  level:
+    root: DEBUG
+    com.circleguard: DEBUG
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
+  endpoint:
+    health:
+      show-details: always

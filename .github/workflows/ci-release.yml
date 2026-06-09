@@ -221,7 +221,7 @@ jobs:
           # 60 attempts × 30 seconds = 1800 seconds = 30 minutes
           for i in $(seq 1 60); do
             STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
-              https://api-stage.circleguard.edu/actuator/health 2>/dev/null || echo "000")
+              ${{ secrets.STAGING_HEALTH_URL }}/actuator/health 2>/dev/null || echo "000")
             if [ "$STATUS" = "200" ]; then
               echo "✓ Staging is healthy (attempt $i/60)"
               exit 0
@@ -250,8 +250,8 @@ jobs:
       - name: Run E2E tests against staging
         run: |
           ./gradlew :tests:e2e:test \
-            -Dauth.service.url=https://api-stage.circleguard.edu \
-            -Dgateway.service.url=https://api-stage.circleguard.edu
+            -Dauth.service.url=${{ secrets.STAGING_HEALTH_URL }} \
+            -Dgateway.service.url=${{ secrets.STAGING_HEALTH_URL }}
         env:
-          E2E_BASE_URL: https://api-stage.circleguard.edu
+          E2E_BASE_URL: ${{ secrets.STAGING_HEALTH_URL }}
           AZ_SUBSCRIPTION_ID: ${{ secrets.AZ_SUBSCRIPTION_ID }}

@@ -1,0 +1,9 @@
+spring:
+  data:
+    redis:
+      host: circleguard-redis-master.circleguard-prod.svc.cluster.local
+
+logging:
+  level:
+    root: WARN
+    com.circleguard: INFO
