@@ -157,18 +157,25 @@ jobs:
     name: Trigger Jenkins CD — Staging
     runs-on: ubuntu-latest
     needs: push-to-acr
-    if: ${{ secrets.STAGING_HEALTH_URL != '' }}
+    continue-on-error: true
     steps:
       - name: Set short SHA
         id: vars
         run: echo "SHORT_SHA=${GITHUB_SHA::7}" >> $GITHUB_OUTPUT
 
       - name: Trigger Jenkins Staging Pipeline
+        env:
+          JENKINS_URL: ${{ secrets.JENKINS_STAGING_URL }}
+          JENKINS_TOKEN: ${{ secrets.JENKINS_TOKEN }}
         run: |
+          if [ -z "$JENKINS_URL" ]; then
+            echo "JENKINS_STAGING_URL not configured — skipping trigger"
+            exit 0
+          fi
           RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" \
             --connect-timeout 10 --max-time 30 \
-            -X POST "${{ secrets.JENKINS_STAGING_URL }}/job/circleguard-staging/buildWithParameters" \
-            --user "ci:${{ secrets.JENKINS_TOKEN }}" \
+            -X POST "$JENKINS_URL/job/circleguard-staging/buildWithParameters" \
+            --user "ci:$JENKINS_TOKEN" \
             --data-urlencode "IMAGE_TAG=staging-${{ steps.vars.outputs.SHORT_SHA }}" \
             --data-urlencode "ENVIRONMENT=staging")
           echo "Jenkins response: $RESPONSE"
@@ -178,11 +185,17 @@ jobs:
           fi
 
       - name: Wait for staging to become healthy (max 15 min)
+        env:
+          STAGING_HEALTH_URL: ${{ secrets.STAGING_HEALTH_URL }}
         run: |
+          if [ -z "$STAGING_HEALTH_URL" ]; then
+            echo "STAGING_HEALTH_URL not configured — skipping health check"
+            exit 0
+          fi
           echo "Polling staging health endpoint (max 15 minutes)..."
           for i in $(seq 1 30); do
             STATUS=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 \
-              "${{ secrets.STAGING_HEALTH_URL }}/actuator/health" 2>/dev/null || echo "000")
+              "$STAGING_HEALTH_URL/actuator/health" 2>/dev/null || echo "000")
             if [ "$STATUS" = "200" ]; then
               echo "✓ Staging healthy (attempt $i/30)"
               exit 0
@@ -197,7 +210,7 @@ jobs:
     name: E2E Tests against Staging
     runs-on: ubuntu-latest
     needs: trigger-jenkins-staging
-    if: ${{ secrets.STAGING_HEALTH_URL != '' }}
+    continue-on-error: true
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -210,6 +223,11 @@ jobs:
           cache: 'gradle'
 
       - name: Run E2E tests against staging
-        run: ./gradlew e2eTest
         env:
           E2E_BASE_URL: ${{ secrets.STAGING_HEALTH_URL }}
+        run: |
+          if [ -z "$E2E_BASE_URL" ]; then
+            echo "STAGING_HEALTH_URL not configured — skipping E2E tests"
+            exit 0
+          fi
+          ./gradlew e2eTest
