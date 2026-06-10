@@ -1,0 +1,25 @@
+spring:
+  datasource:
+    url: jdbc:postgresql://circleguard-postgres.circleguard-stage.svc.cluster.local:5432/circleguard_auth
+    hikari:
+      maximum-pool-size: 10
+      minimum-idle: 3
+  jpa:
+    hibernate:
+      ddl-auto: validate
+  ldap:
+    urls: ldap://circleguard-openldap.circleguard-stage.svc.cluster.local:389
+
+logging:
+  level:
+    root: INFO
+    com.circleguard: INFO
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
+  endpoint:
+    health:
+      show-details: when-authorized

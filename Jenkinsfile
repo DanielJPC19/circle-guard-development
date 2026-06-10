@@ -16,15 +16,13 @@ pipeline {
     }
 
     environment {
-        ACR_REGISTRY      = 'cgregistry.azurecr.io'
-        ACR_REPO          = 'circleguard'
-        SERVICES          = 'auth-service identity-service promotion-service notification-service form-service gateway-service dashboard-service file-service'
-        GKE_CLUSTER       = 'circleguard-stage'
-        GKE_ZONE          = 'us-east1-b'
-        PROJECT_ID        = 'ingesoft-v'
-        JENKINS_OPS_URL   = 'http://jenkins-ops.circleguard.internal:8080'
-        JENKINS_OPS_JOB   = 'circle-guard-operation/main'
-        JENKINS_OPS_TOKEN = 'circleguard-cd-trigger'
+        ACR_REGISTRY         = 'cgregicesi.azurecr.io'
+        ACR_REPO             = 'circleguard'
+        SERVICES             = 'auth-service identity-service promotion-service notification-service form-service gateway-service dashboard-service file-service'
+        AKS_RG_STAGING       = 'circleguard-stage-rg'
+        AKS_CLUSTER_STAGING  = 'circleguard-stage'
+        AKS_RG_PROD          = 'circleguard-prod-rg'
+        AKS_CLUSTER_PROD     = 'circleguard-prod'
     }
 
     stages {
@@ -262,69 +260,19 @@ pipeline {
         }
 
         // ════════════════════════════════════════════════════════════════
-        // TRIGGER OPS STAGING + WAIT RESULT — release/*
-        // Espera que el OPS job inicie (4 min) y complete (45 min)
+        // TRIGGER CD STAGING — release/*
+        // Dispara el job circleguard-staging en este mismo Jenkins
         // ════════════════════════════════════════════════════════════════
 
         stage('Trigger OPS — STAGING') {
             when { branch pattern: 'release/.*', comparator: 'REGEXP' }
             steps {
-                withCredentials([usernamePassword(
-                    credentialsId: 'jenkins-ops-api-credentials',
-                    usernameVariable: 'OPS_USER',
-                    passwordVariable: 'OPS_PASS'
-                )]) {
-                    sh """
-                        CRUMB=\$(curl -s -u "\${OPS_USER}:\${OPS_PASS}" \\
-                            "\${JENKINS_OPS_URL}/crumbIssuer/api/xml?xpath=concat(//crumbRequestField,\\\":\\\",//crumb)")
-
-                        echo "==> Disparando OPS pipeline para staging (IMAGE_TAG=${env.IMAGE_TAG})..."
-                        QUEUE_URL=\$(curl -s -X POST \\
-                            -u "\${OPS_USER}:\${OPS_PASS}" \\
-                            -H "\${CRUMB}" \\
-                            -D - -o /dev/null \\
-                            "\${JENKINS_OPS_URL}/job/\${JENKINS_OPS_JOB}/buildWithParameters?token=\${JENKINS_OPS_TOKEN}&IMAGE_TAG=${env.IMAGE_TAG}&ENVIRONMENT=staging" \\
-                            | grep -i "^location:" | awk '{print \$2}' | tr -d '\\r\\n')
-
-                        echo "==> Queue item: \${QUEUE_URL}"
-
-                        BUILD_URL=""
-                        for i in \$(seq 1 24); do
-                            ITEM_JSON=\$(curl -sf -u "\${OPS_USER}:\${OPS_PASS}" "\${QUEUE_URL}api/json" 2>/dev/null || echo "{}")
-                            BUILD_URL=\$(echo "\${ITEM_JSON}" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('executable',{}).get('url',''))" 2>/dev/null || echo "")
-                            if [ -n "\${BUILD_URL}" ]; then
-                                echo "==> OPS build iniciado: \${BUILD_URL}"
-                                break
-                            fi
-                            echo "==> Esperando que OPS build empiece... intento \${i}/24"
-                            sleep 10
-                        done
-
-                        if [ -z "\${BUILD_URL}" ]; then
-                            echo "ERROR: OPS build no inició en 4 minutos"
-                            exit 1
-                        fi
-
-                        echo "==> Esperando que OPS build complete (max 45 min)..."
-                        OPS_RESULT=""
-                        for i in \$(seq 1 90); do
-                            OPS_RESULT=\$(curl -sf -u "\${OPS_USER}:\${OPS_PASS}" "\${BUILD_URL}api/json" \\
-                                | python3 -c "import sys,json; d=json.load(sys.stdin); r=d.get('result'); print(r if r else '')" 2>/dev/null || echo "")
-                            if [ -n "\${OPS_RESULT}" ]; then
-                                echo "==> OPS build completó: \${OPS_RESULT}"
-                                break
-                            fi
-                            echo "==> OPS en progreso... intento \${i}/90"
-                            sleep 30
-                        done
-
-                        if [ "\${OPS_RESULT}" != "SUCCESS" ]; then
-                            echo "ERROR: OPS pipeline falló (resultado: \${OPS_RESULT})"
-                            exit 1
-                        fi
-                        echo "==> OPS staging completado exitosamente."
-                    """
-                }
+                build job: 'circleguard-staging',
+                      parameters: [
+                          string(name: 'IMAGE_TAG',   value: env.IMAGE_TAG),
+                          string(name: 'ENVIRONMENT', value: 'staging')
+                      ],
+                      wait: true
             }
         }
 
@@ -336,14 +284,19 @@ pipeline {
         stage('E2E Tests') {
             when { branch pattern: 'release/.*', comparator: 'REGEXP' }
             steps {
-                withCredentials([file(
-                    credentialsId: 'gcp-service-account-key',
-                    variable: 'GCP_KEY_FILE'
+                withCredentials([usernamePassword(
+                    credentialsId: 'azure-sp-credentials',
+                    usernameVariable: 'AZ_CLIENT_ID',
+                    passwordVariable: 'AZ_CLIENT_SECRET'
                 )]) {
                     sh """
-                        gcloud auth activate-service-account --key-file=\$GCP_KEY_FILE
-                        gcloud container clusters get-credentials \${GKE_CLUSTER} \\
-                          --zone \${GKE_ZONE} --project \${PROJECT_ID}
+                        az login --service-principal \
+                          -u \$AZ_CLIENT_ID -p \$AZ_CLIENT_SECRET \
+                          --tenant \$(az account show --query tenantId -o tsv 2>/dev/null || echo \$AZ_TENANT_ID)
+                        az aks get-credentials \
+                          --resource-group \${AKS_RG_STAGING} \
+                          --name \${AKS_CLUSTER_STAGING} \
+                          --overwrite-existing
 
                         echo "==> Esperando estabilidad de servicios E2E en circleguard-stage (max 25 min)..."
                         STABLE=0
@@ -399,7 +352,7 @@ pipeline {
 
         // ════════════════════════════════════════════════════════════════
         // PERFORMANCE TESTS — main/master
-        // GKE port-forward + run_locust.sh + publishHTML
+        // AKS port-forward + run_locust.sh + publishHTML
         // ════════════════════════════════════════════════════════════════
 
         stage('Performance Tests') {
@@ -407,14 +360,19 @@ pipeline {
                 anyOf { branch 'main'; branch 'master' }
             }
             steps {
-                withCredentials([file(
-                    credentialsId: 'gcp-service-account-key',
-                    variable: 'GCP_KEY_FILE'
+                withCredentials([usernamePassword(
+                    credentialsId: 'azure-sp-credentials',
+                    usernameVariable: 'AZ_CLIENT_ID',
+                    passwordVariable: 'AZ_CLIENT_SECRET'
                 )]) {
                     sh """
-                        gcloud auth activate-service-account --key-file=\$GCP_KEY_FILE
-                        gcloud container clusters get-credentials \${GKE_CLUSTER} \\
-                          --zone \${GKE_ZONE} --project \${PROJECT_ID}
+                        az login --service-principal \
+                          -u \$AZ_CLIENT_ID -p \$AZ_CLIENT_SECRET \
+                          --tenant \$(az account show --query tenantId -o tsv 2>/dev/null || echo \$AZ_TENANT_ID)
+                        az aks get-credentials \
+                          --resource-group \${AKS_RG_STAGING} \
+                          --name \${AKS_CLUSTER_STAGING} \
+                          --overwrite-existing
 
                         kubectl port-forward svc/auth-service      8180:8180 -n circleguard-stage &
                         kubectl port-forward svc/gateway-service   8087:8087 -n circleguard-stage &
@@ -511,7 +469,8 @@ ${imageLines}
         }
 
         // ════════════════════════════════════════════════════════════════
-        // TRIGGER OPS PROD + WAIT — main/master
+        // TRIGGER CD PROD — main/master
+        // Dispara el job circleguard-prod en este mismo Jenkins
         // ════════════════════════════════════════════════════════════════
 
         stage('Trigger OPS — PROD') {
@@ -519,24 +478,12 @@ ${imageLines}
                 anyOf { branch 'main'; branch 'master' }
             }
             steps {
-                withCredentials([usernamePassword(
-                    credentialsId: 'jenkins-ops-api-credentials',
-                    usernameVariable: 'OPS_USER',
-                    passwordVariable: 'OPS_PASS'
-                )]) {
-                    sh """
-                        CRUMB=\$(curl -s -u "\${OPS_USER}:\${OPS_PASS}" \\
-                            "\${JENKINS_OPS_URL}/crumbIssuer/api/xml?xpath=concat(//crumbRequestField,\\\":\\\",//crumb)")
-
-                        echo "==> Disparando OPS pipeline para producción (IMAGE_TAG=${env.SHORT_SHA})..."
-                        curl -f -X POST \\
-                            -u "\${OPS_USER}:\${OPS_PASS}" \\
-                            -H "\${CRUMB}" \\
-                            "\${JENKINS_OPS_URL}/job/\${JENKINS_OPS_JOB}/buildWithParameters?token=\${JENKINS_OPS_TOKEN}&IMAGE_TAG=${env.SHORT_SHA}&ENVIRONMENT=production"
-
-                        echo "==> OPS prod disparado. El deploy a producción continúa en Jenkinsfile-prod."
-                    """
-                }
+                build job: 'circleguard-prod',
+                      parameters: [
+                          string(name: 'IMAGE_TAG',   value: env.IMAGE_TAG),
+                          string(name: 'ENVIRONMENT', value: 'production')
+                      ],
+                      wait: true
             }
         }
 

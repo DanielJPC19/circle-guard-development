@@ -147,7 +147,7 @@ jobs:
       - name: OWASP ZAP Full Scan (against staging)
         uses: zaproxy/action-full-scan@v0.10.0
         with:
-          target: 'https://api-stage.circleguard.edu'
+          target: '${{ secrets.STAGING_HEALTH_URL }}'
           rules_file_name: '.zap/rules.tsv'
           cmd_options: '-a'
           artifact_name: 'zap-report'
@@ -232,7 +232,7 @@ jobs:
       - name: Run performance tests against staging
         run: |
           locust -f tests/performance/locustfile.py \
-            --host=https://api-stage.circleguard.edu \
+            --host=${{ secrets.STAGING_HEALTH_URL }} \
             --users=50 --spawn-rate=5 --run-time=5m \
             --headless --csv=results/locust
 
@@ -367,7 +367,7 @@ jobs:
           sleep 300
           for i in $(seq 1 12); do
             STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
-              https://api.circleguard.edu/actuator/health 2>/dev/null || echo "000")
+              ${{ secrets.PROD_HEALTH_URL }}/actuator/health 2>/dev/null || echo "000")
             if [ "$STATUS" = "200" ]; then
               echo "Production is healthy"
               exit 0

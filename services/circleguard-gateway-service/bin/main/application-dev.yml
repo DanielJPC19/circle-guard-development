@@ -1,0 +1,18 @@
+spring:
+  data:
+    redis:
+      host: circleguard-redis-master.circleguard-dev.svc.cluster.local
+
+logging:
+  level:
+    root: DEBUG
+    com.circleguard: DEBUG
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
+  endpoint:
+    health:
+      show-details: always
