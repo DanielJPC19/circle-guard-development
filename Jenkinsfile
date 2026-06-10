@@ -16,7 +16,7 @@ pipeline {
     }
 
     environment {
-        ACR_REGISTRY         = 'cgregistry.azurecr.io'
+        ACR_REGISTRY         = 'cgregicesi.azurecr.io'
         ACR_REPO             = 'circleguard'
         SERVICES             = 'auth-service identity-service promotion-service notification-service form-service gateway-service dashboard-service file-service'
         AKS_RG_STAGING       = 'circleguard-stage-rg'
