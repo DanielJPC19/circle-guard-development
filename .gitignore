@@ -45,3 +45,5 @@ mobile/.metro-cache/
 # Test reports
 **/build/reports/
 **/build/test-results/
+
+.claude
