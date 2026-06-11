@@ -142,16 +142,19 @@ jobs:
         run: |
           JAR=$(find services/${{ matrix.service }}/build/libs -name "*.jar" ! -name "*-plain.jar" | head -1)
           IMAGE="${{ secrets.ACR_LOGIN_SERVER }}/circleguard/${{ matrix.service }}:staging-${{ steps.vars.outputs.SHORT_SHA }}"
+          IMAGE_LATEST="${{ secrets.ACR_LOGIN_SERVER }}/circleguard/${{ matrix.service }}:staging-latest"
           docker build \
             -f services/${{ matrix.service }}/Dockerfile \
             --build-arg JAR_FILE=${JAR} \
             -t ${IMAGE} \
+            -t ${IMAGE_LATEST} \
             --label "git.sha=${GITHUB_SHA}" \
             --label "git.branch=${GITHUB_REF_NAME}" \
             --label "build.date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
             .
           docker push ${IMAGE}
-          echo "Pushed: ${IMAGE}"
+          docker push ${IMAGE_LATEST}
+          echo "Pushed: ${IMAGE} and ${IMAGE_LATEST}"
 
   trigger-jenkins-staging:
     name: Trigger Jenkins CD — Staging
