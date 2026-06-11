@@ -349,10 +349,18 @@ jobs:
         run: echo "SHORT_SHA=${GITHUB_SHA::7}" >> $GITHUB_OUTPUT
 
       - name: Trigger Jenkins Production Pipeline
+        env:
+          JENKINS_URL: ${{ secrets.JENKINS_PROD_URL }}
+          JENKINS_TOKEN: ${{ secrets.JENKINS_TOKEN }}
         run: |
+          CRUMB=$(curl -s --user "ci:$JENKINS_TOKEN" \
+            "$JENKINS_URL/crumbIssuer/api/json" | \
+            python3 -c "import sys,json; d=json.load(sys.stdin); print(d['crumbRequestField']+':'+d['crumb'])")
           RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" \
-            -X POST "${{ secrets.JENKINS_PROD_URL }}/job/circleguard-prod/buildWithParameters" \
-            --user "ci:${{ secrets.JENKINS_TOKEN }}" \
+            --connect-timeout 10 --max-time 30 \
+            -X POST "$JENKINS_URL/job/circleguard-prod/buildWithParameters" \
+            --user "ci:$JENKINS_TOKEN" \
+            -H "$CRUMB" \
             --data-urlencode "IMAGE_TAG=prod-${{ steps.vars.outputs.SHORT_SHA }}" \
             --data-urlencode "ENVIRONMENT=production")
           echo "Jenkins response: $RESPONSE"

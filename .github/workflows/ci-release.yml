@@ -172,10 +172,14 @@ jobs:
             echo "JENKINS_STAGING_URL not configured — skipping trigger"
             exit 0
           fi
+          CRUMB=$(curl -s --user "ci:$JENKINS_TOKEN" \
+            "$JENKINS_URL/crumbIssuer/api/json" | \
+            python3 -c "import sys,json; d=json.load(sys.stdin); print(d['crumbRequestField']+':'+d['crumb'])")
           RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" \
             --connect-timeout 10 --max-time 30 \
             -X POST "$JENKINS_URL/job/circleguard-staging/buildWithParameters" \
             --user "ci:$JENKINS_TOKEN" \
+            -H "$CRUMB" \
             --data-urlencode "IMAGE_TAG=staging-${{ steps.vars.outputs.SHORT_SHA }}" \
             --data-urlencode "ENVIRONMENT=staging")
           echo "Jenkins response: $RESPONSE"
