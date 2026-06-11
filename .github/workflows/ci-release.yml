@@ -157,7 +157,6 @@ jobs:
     name: Trigger Jenkins CD — Staging
     runs-on: ubuntu-latest
     needs: push-to-acr
-    continue-on-error: true
     steps:
       - name: Set short SHA
         id: vars
@@ -172,16 +171,23 @@ jobs:
             echo "JENKINS_STAGING_URL not configured — skipping trigger"
             exit 0
           fi
-          CRUMB=$(curl -s --user "ci:$JENKINS_TOKEN" \
+          COOKIE_JAR=$(mktemp)
+          CRUMB=$(curl -s -c "$COOKIE_JAR" --user "ci:$JENKINS_TOKEN" \
             "$JENKINS_URL/crumbIssuer/api/json" | \
             python3 -c "import sys,json; d=json.load(sys.stdin); print(d['crumbRequestField']+':'+d['crumb'])")
+          if [ -z "$CRUMB" ]; then
+            echo "ERROR: no se pudo obtener el CSRF crumb de Jenkins"
+            rm -f "$COOKIE_JAR"
+            exit 1
+          fi
           RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" \
+            -b "$COOKIE_JAR" \
             --connect-timeout 10 --max-time 30 \
             -X POST "$JENKINS_URL/job/circleguard-staging/buildWithParameters" \
             --user "ci:$JENKINS_TOKEN" \
             -H "$CRUMB" \
-            --data-urlencode "IMAGE_TAG=staging-${{ steps.vars.outputs.SHORT_SHA }}" \
-            --data-urlencode "ENVIRONMENT=staging")
+            --data-urlencode "IMAGE_TAG=staging-${{ steps.vars.outputs.SHORT_SHA }}")
+          rm -f "$COOKIE_JAR"
           echo "Jenkins response: $RESPONSE"
           if [ "$RESPONSE" != "201" ]; then
             echo "Failed to trigger Jenkins staging pipeline (HTTP $RESPONSE)"
