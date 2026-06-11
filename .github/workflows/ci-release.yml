@@ -142,22 +142,24 @@ jobs:
         run: |
           JAR=$(find services/${{ matrix.service }}/build/libs -name "*.jar" ! -name "*-plain.jar" | head -1)
           IMAGE="${{ secrets.ACR_LOGIN_SERVER }}/circleguard/${{ matrix.service }}:staging-${{ steps.vars.outputs.SHORT_SHA }}"
+          IMAGE_LATEST="${{ secrets.ACR_LOGIN_SERVER }}/circleguard/${{ matrix.service }}:staging-latest"
           docker build \
             -f services/${{ matrix.service }}/Dockerfile \
             --build-arg JAR_FILE=${JAR} \
             -t ${IMAGE} \
+            -t ${IMAGE_LATEST} \
             --label "git.sha=${GITHUB_SHA}" \
             --label "git.branch=${GITHUB_REF_NAME}" \
             --label "build.date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
             .
           docker push ${IMAGE}
-          echo "Pushed: ${IMAGE}"
+          docker push ${IMAGE_LATEST}
+          echo "Pushed: ${IMAGE} and ${IMAGE_LATEST}"
 
   trigger-jenkins-staging:
     name: Trigger Jenkins CD — Staging
     runs-on: ubuntu-latest
     needs: push-to-acr
-    continue-on-error: true
     steps:
       - name: Set short SHA
         id: vars
@@ -172,21 +174,54 @@ jobs:
             echo "JENKINS_STAGING_URL not configured — skipping trigger"
             exit 0
           fi
-          CRUMB=$(curl -s --user "ci:$JENKINS_TOKEN" \
+          COOKIE_JAR=$(mktemp)
+          CRUMB=$(curl -s -c "$COOKIE_JAR" --user "ci:$JENKINS_TOKEN" \
             "$JENKINS_URL/crumbIssuer/api/json" | \
             python3 -c "import sys,json; d=json.load(sys.stdin); print(d['crumbRequestField']+':'+d['crumb'])")
-          RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" \
+          if [ -z "$CRUMB" ]; then
+            echo "ERROR: no se pudo obtener el CSRF crumb de Jenkins"
+            rm -f "$COOKIE_JAR"
+            exit 1
+          fi
+          RESPONSE_BODY=$(mktemp)
+          HTTP_CODE=$(curl -s -o "$RESPONSE_BODY" -w "%{http_code}" \
+            -b "$COOKIE_JAR" \
             --connect-timeout 10 --max-time 30 \
             -X POST "$JENKINS_URL/job/circleguard-staging/buildWithParameters" \
             --user "ci:$JENKINS_TOKEN" \
             -H "$CRUMB" \
             --data-urlencode "IMAGE_TAG=staging-${{ steps.vars.outputs.SHORT_SHA }}" \
-            --data-urlencode "ENVIRONMENT=staging")
-          echo "Jenkins response: $RESPONSE"
-          if [ "$RESPONSE" != "201" ]; then
-            echo "Failed to trigger Jenkins staging pipeline (HTTP $RESPONSE)"
-            exit 1
+            --data-urlencode "ENVIRONMENT=staging" \
+            --data-urlencode "RUN_CHAOS=false")
+          echo "Jenkins HTTP: $HTTP_CODE"
+          echo "Jenkins body: $(cat $RESPONSE_BODY)"
+          rm -f "$RESPONSE_BODY"
+          if [ "$HTTP_CODE" = "201" ]; then
+            echo "Jenkins trigger exitoso"
+            rm -f "$COOKIE_JAR"
+            exit 0
           fi
+          if [ "$HTTP_CODE" = "400" ]; then
+            echo "Fallback: job no parametrizado aún — iniciando primera ejecución con /build..."
+            CRUMB2=$(curl -s -c "$COOKIE_JAR" --user "ci:$JENKINS_TOKEN" \
+              "$JENKINS_URL/crumbIssuer/api/json" | \
+              python3 -c "import sys,json; d=json.load(sys.stdin); print(d['crumbRequestField']+':'+d['crumb'])")
+            FB_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+              -b "$COOKIE_JAR" \
+              --connect-timeout 10 --max-time 30 \
+              -X POST "$JENKINS_URL/job/circleguard-staging/build" \
+              --user "ci:$JENKINS_TOKEN" \
+              -H "$CRUMB2")
+            echo "Fallback /build HTTP: $FB_CODE"
+            if [ "$FB_CODE" = "201" ]; then
+              echo "Primera ejecución iniciada — parámetros registrados. El próximo push usará /buildWithParameters."
+              rm -f "$COOKIE_JAR"
+              exit 0
+            fi
+          fi
+          rm -f "$COOKIE_JAR"
+          echo "Failed to trigger Jenkins staging pipeline (HTTP $HTTP_CODE)"
+          exit 1
 
       - name: Wait for staging to become healthy (max 15 min)
         env:

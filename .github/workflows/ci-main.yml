@@ -314,9 +314,52 @@ jobs:
       - name: Generate release notes from git log
         run: |
           LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
-          echo "# Release ${{ steps.semver.outputs.NEW_TAG }}" > release-notes.md
-          echo "" >> release-notes.md
-          echo "## Changes since ${LAST_TAG}" >> release-notes.md
+          cat > release-notes.md << 'RELEASE_EOF'
+          ## CircleGuard ${{ steps.semver.outputs.NEW_TAG }}
+
+          Sistema universitario de rastreo de contactos basado en microservicios.
+          Desplegado sobre Azure AKS (staging) y GKE (prod).
+
+          ---
+
+          ### Microservicios
+
+          | Servicio | Puerto | Responsabilidad |
+          |---|---|---|
+          | auth-service | 8180 | Login LDAP/local, emisión de JWT y tokens QR de corta duración |
+          | gateway-service | 8087 | Punto de entrada para tráfico móvil; validación JWT/QR y rate-limiting con Redis |
+          | identity-service | 8083 | Gestión de identidades anónimas cifradas; publica eventos a Kafka |
+          | promotion-service | 8088 | Grafo de contactos (Neo4j), infraestructura espacial, ciclo de vida de estado de salud y gestión de círculos |
+          | form-service | 8086 | Encuestas de salud y adjuntos; publica `survey.submitted` a Kafka |
+          | notification-service | 8082 | Consumidor Kafka para alertas de exposición, cercado geográfico y notificaciones prioritarias |
+          | dashboard-service | 8084 | Analítica para administradores con filtrado k-anonimato |
+          | file-service | 8085 | Carga/descarga de adjuntos de encuestas |
+
+          ### Mobile App
+
+          Aplicación React Native / Expo con autenticación, escaneo QR para check-in en campus,
+          envío de encuestas de salud, vista de círculos de contacto y panel de administración
+          con analítica y mapeo espacial de pisos.
+
+          ### Infraestructura
+
+          - **Multi-cloud:** dev en Digital Ocean (DOKS), staging en Azure AKS, prod en GCP GKE
+          - **Middleware en K8s:** PostgreSQL 16 (StatefulSet), Neo4j, Kafka + Zookeeper, Redis, OpenLDAP
+          - **Seguridad:** Sealed Secrets, Spring Security + JWT, cifrado de identidades (AesBytesEncryptor)
+          - **Escalado:** HPA 2–8 réplicas; rollback automático ante fallo de rollout
+
+          ### Pruebas
+
+          - Unit tests (JUnit 5 + Mockito) — cobertura mínima 70% por JaCoCo
+          - Integration tests (Testcontainers — PostgreSQL, Neo4j, Redis reales)
+          - E2E tests (REST Assured contra staging)
+          - Performance tests (Locust): 50 usuarios, 5 minutos, umbral < 5% error rate
+
+          ---
+
+          RELEASE_EOF
+
+          echo "### Cambios desde ${LAST_TAG}" >> release-notes.md
           echo "" >> release-notes.md
           git log ${LAST_TAG}..HEAD --pretty=format:"- %s (%h)" >> release-notes.md
 
@@ -353,16 +396,23 @@ jobs:
           JENKINS_URL: ${{ secrets.JENKINS_PROD_URL }}
           JENKINS_TOKEN: ${{ secrets.JENKINS_TOKEN }}
         run: |
-          CRUMB=$(curl -s --user "ci:$JENKINS_TOKEN" \
+          COOKIE_JAR=$(mktemp)
+          CRUMB=$(curl -s -c "$COOKIE_JAR" --user "ci:$JENKINS_TOKEN" \
             "$JENKINS_URL/crumbIssuer/api/json" | \
             python3 -c "import sys,json; d=json.load(sys.stdin); print(d['crumbRequestField']+':'+d['crumb'])")
+          if [ -z "$CRUMB" ]; then
+            echo "ERROR: no se pudo obtener el CSRF crumb de Jenkins"
+            rm -f "$COOKIE_JAR"
+            exit 1
+          fi
           RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" \
+            -b "$COOKIE_JAR" \
             --connect-timeout 10 --max-time 30 \
             -X POST "$JENKINS_URL/job/circleguard-prod/buildWithParameters" \
             --user "ci:$JENKINS_TOKEN" \
             -H "$CRUMB" \
-            --data-urlencode "IMAGE_TAG=prod-${{ steps.vars.outputs.SHORT_SHA }}" \
-            --data-urlencode "ENVIRONMENT=production")
+            --data-urlencode "IMAGE_TAG=prod-${{ steps.vars.outputs.SHORT_SHA }}")
+          rm -f "$COOKIE_JAR"
           echo "Jenkins response: $RESPONSE"
           if [ "$RESPONSE" != "201" ]; then
             echo "Failed to trigger Jenkins production pipeline"
