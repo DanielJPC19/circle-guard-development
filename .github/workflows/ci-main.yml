@@ -159,17 +159,20 @@ jobs:
           JAR=$(find services/${{ matrix.service }}/build/libs -name "*.jar" ! -name "*-plain.jar" | head -1)
           SHORT_SHA="${{ steps.vars.outputs.SHORT_SHA }}"
           PROD_TAG="${{ secrets.ACR_LOGIN_SERVER }}/circleguard/${{ matrix.service }}:prod-${SHORT_SHA}"
+          PROD_LATEST_TAG="${{ secrets.ACR_LOGIN_SERVER }}/circleguard/${{ matrix.service }}:prod-latest"
           LATEST_TAG="${{ secrets.ACR_LOGIN_SERVER }}/circleguard/${{ matrix.service }}:latest"
           docker build \
             -f services/${{ matrix.service }}/Dockerfile \
             --build-arg JAR_FILE=${JAR} \
             -t ${PROD_TAG} \
+            -t ${PROD_LATEST_TAG} \
             -t ${LATEST_TAG} \
             --label "git.sha=${GITHUB_SHA}" \
             --label "git.branch=${GITHUB_REF_NAME}" \
             --label "build.date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
             .
           docker push ${PROD_TAG}
+          docker push ${PROD_LATEST_TAG}
           docker push ${LATEST_TAG}
           echo "Pushed: ${PROD_TAG}"
 
