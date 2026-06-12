@@ -458,21 +458,28 @@ jobs:
           echo "Failed to trigger Jenkins production pipeline (HTTP $HTTP_CODE)"
           exit 1
 
-      - name: Wait for production deploy (max 30 min)
+      - name: Wait for Jenkins Production (40 intentos × 60s)
         run: |
-          echo "Waiting for production deployment..."
-          sleep 300
-          for i in $(seq 1 12); do
-            STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
-              ${{ secrets.PROD_HEALTH_URL }}/actuator/health 2>/dev/null || echo "000")
-            if [ "$STATUS" = "200" ]; then
-              echo "Production is healthy"
+          echo "Esperando 30s para que Jenkins registre el build..."
+          sleep 30
+          for i in $(seq 1 40); do
+            echo "Intento $i/40..."
+            RESULT=$(curl -sf \
+              "${{ secrets.JENKINS_PROD_URL }}/job/circleguard-prod/lastBuild/api/json" \
+              --user "ci:${{ secrets.JENKINS_TOKEN }}" | \
+              python3 -c "import sys,json; b=json.load(sys.stdin); print(b.get('result') or 'RUNNING')" \
+              2>/dev/null || echo "CONNECTING")
+            echo "Estado Jenkins: $RESULT"
+            if [ "$RESULT" = "SUCCESS" ]; then
+              echo "Despliegue a producción exitoso"
               exit 0
+            elif [ "$RESULT" = "FAILURE" ] || [ "$RESULT" = "ABORTED" ] || [ "$RESULT" = "UNSTABLE" ]; then
+              echo "Jenkins reportó fallo: $RESULT"
+              exit 1
             fi
-            echo "Attempt $i/12: production not ready (status: $STATUS), waiting 30s..."
-            sleep 30
+            sleep 60
           done
-          echo "Production health check failed"
+          echo "Error: Jenkins no completó tras 40 intentos (40 min)"
           exit 1
 
   create-github-release:
